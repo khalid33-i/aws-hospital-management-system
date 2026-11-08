@@ -1,0 +1,33 @@
+# Secrets (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials
+*.tfvars
+!*.tfvars.example
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Node
+node_modules/
+npm-debug.log*
+coverage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

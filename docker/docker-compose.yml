@@ -1,0 +1,43 @@
+# Local development stack: the app + MySQL 8.   Usage (from the repository root):
+#   cp .env.example .env        # then set DB_PASSWORD, DB_ROOT_PASSWORD, JWT_SECRET
+#   docker compose -f docker/docker-compose.yml --env-file .env up --build
+#   docker compose -f docker/docker-compose.yml --env-file .env exec app node backend/scripts/seed.js
+name: hms
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:-hms}
+      MYSQL_USER: ${DB_USER:-hms_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/mysql
+      # executed once, the first time the data volume is created
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "127.0.0.1:3306:3306"   # reachable from this machine only
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      DB_HOST: db
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  db-data:
