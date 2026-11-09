@@ -17,3 +17,7 @@ output "app_role_name" {
 output "app_instance_profile_name" {
   value = aws_iam_instance_profile.app.name
 }
+
+output "kms_key_arn" {
+  value = aws_kms_key.main.arn
+}

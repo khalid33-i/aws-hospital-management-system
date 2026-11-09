@@ -33,3 +33,7 @@ output "app_sg_id" {
 output "db_sg_id" {
   value = module.security.db_sg_id
 }
+
+output "documents_bucket" {
+  value = module.storage.bucket_name
+}

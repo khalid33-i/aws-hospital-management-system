@@ -52,3 +52,11 @@ module "security" {
   name   = "hms-${var.environment}"
   vpc_id = module.networking.vpc_id
 }
+
+module "storage" {
+  source = "../../modules/storage"
+
+  name          = "hms-${var.environment}"
+  kms_key_arn   = module.security.kms_key_arn
+  app_role_name = module.security.app_role_name
+}
