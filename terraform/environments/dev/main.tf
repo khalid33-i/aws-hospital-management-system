@@ -60,3 +60,15 @@ module "storage" {
   kms_key_arn   = module.security.kms_key_arn
   app_role_name = module.security.app_role_name
 }
+
+
+module "database" {
+  source = "../../modules/database"
+
+  name                  = "hms-${var.environment}"
+  subnet_ids            = module.networking.private_db_subnet_ids
+  security_group_id     = module.security.db_sg_id
+  kms_key_arn           = module.security.kms_key_arn
+  app_role_name         = module.security.app_role_name
+  backup_retention_days = 1
+}

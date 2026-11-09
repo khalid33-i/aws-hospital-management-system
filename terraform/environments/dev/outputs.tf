@@ -37,3 +37,7 @@ output "db_sg_id" {
 output "documents_bucket" {
   value = module.storage.bucket_name
 }
+
+output "db_endpoint" {
+  value = module.database.endpoint
+}
