@@ -72,3 +72,34 @@ module "database" {
   app_role_name         = module.security.app_role_name
   backup_retention_days = 1
 }
+
+module "compute" {
+  source = "../../modules/compute"
+
+  # wait for the NAT route and the database (and its secret policy) before servers boot
+  depends_on = [module.networking, module.database]
+
+  name                   = "hms-${var.environment}"
+  vpc_id                 = module.networking.vpc_id
+  public_subnet_ids      = module.networking.public_subnet_ids
+  private_app_subnet_ids = module.networking.private_app_subnet_ids
+  alb_sg_id              = module.security.alb_sg_id
+  app_sg_id              = module.security.app_sg_id
+  instance_profile_name  = module.security.app_instance_profile_name
+  app_role_name          = module.security.app_role_name
+  kms_key_arn            = module.security.kms_key_arn
+  db_host                = module.database.endpoint
+  db_name                = module.database.db_name
+  db_secret_arn          = module.database.master_secret_arn
+}
+
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  name                    = "hms-${var.environment}"
+  alert_email             = var.alert_email
+  asg_name                = module.compute.asg_name
+  alb_arn_suffix          = module.compute.alb_arn_suffix
+  target_group_arn_suffix = module.compute.target_group_arn_suffix
+  db_instance_id          = module.database.instance_id
+}

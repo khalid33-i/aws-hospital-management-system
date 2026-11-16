@@ -41,3 +41,13 @@ output "documents_bucket" {
 output "db_endpoint" {
   value = module.database.endpoint
 }
+output "app_url" {
+  value = "http://${module.compute.alb_dns_name}"
+}
+
+output "asg_name" {
+  value = module.compute.asg_name
+}
+output "dashboard_name" {
+  value = module.monitoring.dashboard_name
+}

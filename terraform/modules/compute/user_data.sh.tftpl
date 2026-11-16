@@ -1,0 +1,122 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee /var/log/hms-user-data.log) 2>&1
+
+REGION="${region}"
+
+# 1. Packages (Node.js 22 from the Amazon Linux repository)
+dnf install -y git jq nodejs22 nodejs22-npm
+
+# 2. Unprivileged service user
+id hms >/dev/null 2>&1 || useradd --system --home-dir /opt/hms --shell /sbin/nologin hms
+mkdir -p /opt/hms
+
+# 3. Application code
+rm -rf /opt/hms/app
+git clone --depth 1 --branch "${git_ref}" "${git_repo}" /opt/hms/app
+cd /opt/hms/app/backend
+npm ci --omit=dev
+
+# 4. CA bundle so the database connection is verified over TLS
+curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /opt/hms/rds-ca.pem
+
+# 5. Secrets come from AWS at boot (never stored in code); the file is readable only by the service user
+DB_SECRET=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "${db_secret_arn}" --query SecretString --output text)
+DB_USER=$(jq -r .username <<<"$DB_SECRET")
+DB_PASS=$(jq -r .password <<<"$DB_SECRET")
+JWT_SECRET=$(aws ssm get-parameter --region "$REGION" --name "${jwt_param}" --with-decryption --query Parameter.Value --output text)
+
+umask 077
+cat > /opt/hms/app/.env <<EOF
+NODE_ENV=production
+PORT=${app_port}
+DB_HOST=${db_host}
+DB_PORT=3306
+DB_NAME=${db_name}
+DB_USER="$DB_USER"
+DB_PASSWORD="$DB_PASS"
+DB_SSL=true
+DB_SSL_CA=/opt/hms/rds-ca.pem
+JWT_SECRET="$JWT_SECRET"
+COOKIE_SECURE=false
+TRUST_PROXY=1
+HOSPITAL_TZ=+03:00
+EOF
+chown -R hms:hms /opt/hms
+umask 022
+
+# 6. Create the database tables if they do not exist yet (safe on every boot)
+runuser -u hms -- node scripts/init-db.js
+
+# 7. Application log file (shipped to CloudWatch Logs) with rotation
+mkdir -p /var/log/hms
+chown hms:hms /var/log/hms
+cat > /etc/logrotate.d/hms <<'LOGROTATE'
+/var/log/hms/app.log {
+  daily
+  rotate 3
+  compress
+  missingok
+  notifempty
+  copytruncate
+}
+LOGROTATE
+
+# 8. Run the app as a service that restarts automatically
+cat > /etc/systemd/system/hms.service <<'UNIT'
+[Unit]
+Description=Hospital Management System API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hms
+Group=hms
+WorkingDirectory=/opt/hms/app/backend
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=append:/var/log/hms/app.log
+StandardError=append:/var/log/hms/app.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now hms
+
+# 9. CloudWatch agent: memory and disk metrics + the application log
+dnf install -y amazon-cloudwatch-agent
+
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWCFG'
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "AutoScalingGroupName": "$${aws:AutoScalingGroupName}" },
+    "aggregation_dimensions": [["AutoScalingGroupName"]],
+    "metrics_collected": {
+      "mem": { "measurement": ["mem_used_percent"] },
+      "disk": { "measurement": ["used_percent"], "resources": ["/"] }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/hms/app.log",
+            "log_group_name": "${log_group}",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}
+CWCFG
+
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json

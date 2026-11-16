@@ -27,3 +27,9 @@ variable "private_db_subnet_cidrs" {
   type    = list(string)
   default = ["10.0.20.0/24", "10.0.21.0/24"]
 }
+
+variable "enable_nat_gateway" {
+  description = "One shared NAT Gateway so private app servers can reach the internet (costs about $1.25/day)"
+  type        = bool
+  default     = true
+}
