@@ -103,3 +103,10 @@ module "monitoring" {
   target_group_arn_suffix = module.compute.target_group_arn_suffix
   db_instance_id          = module.database.instance_id
 }
+module "cicd" {
+  source = "../../modules/cicd"
+
+  name_prefix       = "hms-${var.environment}"
+  github_repository = "khalid33-i/aws-hospital-management-system"
+  asg_name          = module.compute.asg_name
+}

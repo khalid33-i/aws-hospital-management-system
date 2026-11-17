@@ -1,0 +1,125 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Backend tests (MySQL 8.4)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: hms
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: ci_root_password
+      DB_NAME: hms
+      JWT_SECRET: ci-only-secret-ci-only-secret-ci-only-secret
+      BCRYPT_ROUNDS: 4
+      SEED_PASSWORD: CiTestPass123
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Dependency audit (production, high severity)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Create schema and demo data
+        run: |
+          node scripts/init-db.js
+          npm run seed
+      - name: Run tests
+        run: npm test
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f docker/Dockerfile -t hms:ci .
+
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+        working-directory: terraform
+      - run: terraform init -backend=false
+        working-directory: terraform/environments/dev
+      - run: terraform validate
+        working-directory: terraform/environments/dev
+
+  deploy:
+    name: Deploy to AWS
+    # Only after every check passed, only for pushes to main, and only while the AWS stack exists
+    needs: [test, docker, terraform]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: eu-central-1
+      ASG_NAME: hms-dev-asg
+    steps:
+      - name: Authenticate to AWS with OIDC (no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Start rolling instance refresh (new servers pull the latest main)
+        run: |
+          REFRESH_ID=$(aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"InstanceWarmup":300}' \
+            --query InstanceRefreshId --output text)
+          echo "REFRESH_ID=$REFRESH_ID" >> "$GITHUB_ENV"
+
+      - name: Wait for the refresh to finish
+        run: |
+          for i in $(seq 1 60); do
+            STATUS=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$ASG_NAME" \
+              --instance-refresh-ids "$REFRESH_ID" \
+              --query 'InstanceRefreshes[0].Status' --output text)
+            echo "Refresh status: $STATUS"
+            case "$STATUS" in
+              Successful) exit 0 ;;
+              Failed|Cancelled|RollbackSuccessful|RollbackFailed) exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "Timed out waiting for the refresh"
+          exit 1

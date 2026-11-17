@@ -51,3 +51,6 @@ output "asg_name" {
 output "dashboard_name" {
   value = module.monitoring.dashboard_name
 }
+output "github_deploy_role_arn" {
+  value = module.cicd.deploy_role_arn
+}
