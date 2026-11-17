@@ -3,6 +3,15 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
+locals {
+  # GitHub now puts immutable numeric IDs in the "sub" claim: repo:<owner>@<owner_id>/<repo>@<repo_id>:...
+  # We accept both the new format and the classic one.
+  github_subjects = [
+    "repo:khalid33-i@205201884/aws-hospital-management-system@1450175202:environment:${var.github_environment}",
+    "repo:${var.github_repository}:environment:${var.github_environment}",
+  ]
+}
+
 data "aws_iam_policy_document" "trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -22,7 +31,7 @@ data "aws_iam_policy_document" "trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:environment:${var.github_environment}"]
+      values   = local.github_subjects
     }
   }
 }
